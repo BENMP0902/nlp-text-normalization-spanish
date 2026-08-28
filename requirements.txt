@@ -1,0 +1,11 @@
+spacy==3.8.16
+nltk==3.9.1
+scikit-learn==1.5.2
+pandas==2.2.3
+pytest==8.3.3
+
+# Modelo fijado por URL del release, NO por `spacy download` en runtime.
+# Razón: `spacy download` requiere red en tiempo de ejecución. En un contenedor
+# sin salida a internet o en CI, tu build muere. Fijar el wheel es el método
+# documentado por spaCy para instalaciones reproducibles.
+es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl
