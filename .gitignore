@@ -89,7 +89,7 @@ private/
 WORKING/
 
 # ----------- ⚙️ EDITORES E IDEs -----------
-.vscode/
+.vscode/*
 .idea/
 *.swp
 *.swo
