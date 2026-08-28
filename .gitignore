@@ -1,0 +1,137 @@
+# ============================================================
+# .gitignore — Repositorio de Ciberseguridad
+# ============================================================
+# Reglas para evitar leak de credenciales, datos sensibles
+# y artefactos de auditoría.
+# ============================================================
+
+# ----------- 🔴 CRÍTICO: SECRETOS Y CREDENCIALES -----------
+# Variables de entorno
+.env
+.env.*
+*.env
+env.local
+
+# Llaves privadas (cualquier algoritmo)
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.priv
+id_rsa
+id_ed25519
+id_ecdsa
+*_rsa
+*_ed25519
+*_ecdsa
+known_hosts
+authorized_keys
+
+# Archivos explícitos de credenciales
+credentials*
+secrets*
+passwords*
+*.creds
+config.local.*
+
+# VPN configs (HTB, TryHackMe, OpenVPN)
+*.ovpn
+*.conf.local
+
+# Tokens y API keys (defensa en profundidad)
+*token*
+*apikey*
+*api_key*
+
+# ----------- 🟠 ARTEFACTOS DE AUDITORÍA -----------
+# Capturas de tráfico (pueden contener sesiones, credenciales, PII)
+*.pcap
+*.pcapng
+*.cap
+
+# Burp Suite
+*.burp
+burp-project-*
+
+# John the Ripper / Hashcat
+john.pot
+*.pot
+hashcat.potfile
+*.dictstat
+oclHashcat.log
+
+# Hashes y wordlists derivadas
+found.txt
+cracked.txt
+*.hash
+
+# Metasploit
+.msf4/
+msf*.log
+
+# Scans crudos sin sanitizar (revisar antes de publicar)
+nmap_*.xml
+nmap_*.gnmap
+*_scan_raw.*
+
+# Resultados de fuzzers
+gobuster_*.txt
+ffuf_*.json
+dirb_*.txt
+
+# ----------- 🟡 NOTAS PRIVADAS Y DRAFTS -----------
+notes_personal/
+drafts/
+private/
+.private/
+WORKING/
+
+# ----------- ⚙️ EDITORES E IDEs -----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ----------- 💻 SISTEMAS OPERATIVOS -----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# ----------- 🐍 PYTHON -----------
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ----------- 📦 NODE.JS -----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ----------- 📋 LOGS Y TEMPORALES -----------
+*.log
+logs/
+*.tmp
+*.bak
+*.old
+.cache/
+tmp/
+temp/
+
+# ----------- ✅ EXCEPCIONES (forzar inclusión) -----------
+# Si necesitas committear ejemplos:
+!.env.example
+!.env.template
+!*.example.ovpn
