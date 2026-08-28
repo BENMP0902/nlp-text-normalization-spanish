@@ -1,0 +1,15 @@
+# Normaliza finales de línea a LF en el repositorio.
+# text=auto: Git detecta qué archivos son texto.
+# eol=lf: en el working tree se escriben con LF, en cualquier SO.
+* text=auto eol=lf
+
+# Explícitos para los tipos que nos importan.
+*.py    text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+
+# Binarios: Git no debe tocarlos.
+*.png   binary
+*.jpg   binary
+*.whl   binary

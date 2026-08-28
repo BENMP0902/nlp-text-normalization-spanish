@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+# pythonpath (pytest >= 7.0) inserta estas rutas en sys.path antes de importar
+# los tests. Con ".", la raíz del proyecto queda importable y `from src import x`
+# funciona sin instalar el paquete ni tocar PYTHONPATH a mano.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+# -q silencia el ruido; --strict-markers falla si usas un marcador no declarado
+# (evita que un typo en @pytest.mark.slow pase inadvertido y no filtre nada).
+addopts = "-q --strict-markers"

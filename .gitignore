@@ -135,3 +135,5 @@ temp/
 !.env.example
 !.env.template
 !*.example.ovpn
+
+!.vscode/settings.json
