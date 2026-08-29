@@ -3,8 +3,11 @@
 Existe porque la comparación del curso (`stem == lema`) no mide nada: stem y
 lema viven en espacios de salida distintos —el stem es un truncamiento, el lema
 es una palabra real— así que la no-coincidencia es LO ESPERADO, no información.
-Lo que sí importa: cuánto se comprime el vocabulario y a qué costo.
+Lo que sí importa: cuánto se comprime el vocabulario, a qué costo, y si el
+corpus tiene siquiera redundancia que comprimir.
 """
+from collections import defaultdict
+
 import pandas as pd
 from nltk.stem import SnowballStemmer
 
@@ -35,7 +38,7 @@ def compresion_vocabulario(formas: list[str], lemas: list[str]) -> pd.DataFrame:
     if not formas:
         raise ValueError("Lista de formas vacía: nada que medir.")
 
-    v_original = {f.lower() for f in formas}
+    v_original = {f.lower() for f in formas}      # set comprehension: únicos
     v_stem = {_stemmer.stem(f) for f in formas}
     v_lema = set(lemas)
 
@@ -47,6 +50,7 @@ def compresion_vocabulario(formas: list[str], lemas: list[str]) -> pd.DataFrame:
         {"tratamiento": "lematización", "|V|": len(v_lema),
          "reduccion": 1 - len(v_lema) / base},
     ])
+
 
 def tabla_stem_vs_lema(doc, palabras: set[str]) -> pd.DataFrame:
     """Comparativa cualitativa sobre palabras seleccionadas.
@@ -67,4 +71,57 @@ def tabla_stem_vs_lema(doc, palabras: set[str]) -> pd.DataFrame:
                 "stem": _stemmer.stem(token.text),
                 "lema": token.lemma_.lower(),
             })
+    return pd.DataFrame(filas)
+
+
+def type_token_ratio(formas: list[str]) -> float:
+    """TTR: tipos únicos / tokens totales.
+
+    Mide la redundancia léxica del corpus. Cercano a 1.0 = casi todas las
+    palabras aparecen una sola vez (hapax legomena), y entonces NINGUNA técnica
+    de normalización puede comprimir mucho: no hay variantes que fusionar.
+    Es el número que contextualiza cualquier métrica de compresión.
+
+    Advertencia: la TTR depende del tamaño del texto — decrece al crecer el
+    corpus. No compares TTR entre textos de longitud distinta sin normalizar
+    (existen variantes como la TTR estandarizada, STTR, justamente por esto).
+    """
+    if not formas:
+        raise ValueError("Lista de formas vacía: TTR indefinida.")
+    return len({f.lower() for f in formas}) / len(formas)
+
+
+def sobre_stemming(formas: list[str], lemas: list[str]) -> pd.DataFrame:
+    """Casos donde el stemmer fusionó formas que el lematizador separó.
+
+    Esta es la EVIDENCIA del over-stemming, no su afirmación. Agrupamos por
+    stem; si un grupo contiene más de un lema distinto, el stemmer colapsó
+    conceptos que el análisis morfológico distingue.
+
+    Ejemplo típico en español: 'dibujo' (NOUN) y 'dibujar' (VERB) comparten el
+    stem 'dibuj'. Fusionarlos destruye la distinción entre el objeto y la
+    acción — la misma que el capítulo entero está discutiendo.
+    """
+    if len(formas) != len(lemas):
+        raise ValueError("formas y lemas deben venir del mismo conjunto.")
+
+    # defaultdict(set): al acceder a una clave inexistente crea un set vacío,
+    # así evitamos el patrón `if k not in d: d[k] = set()` en cada iteración.
+    por_stem_formas = defaultdict(set)
+    por_stem_lemas = defaultdict(set)
+
+    for forma, lema in zip(formas, lemas):        # zip los recorre en paralelo
+        stem = _stemmer.stem(forma.lower())
+        por_stem_formas[stem].add(forma.lower())
+        por_stem_lemas[stem].add(lema)
+
+    filas = [
+        {
+            "stem": stem,
+            "formas_fusionadas": ", ".join(sorted(por_stem_formas[stem])),
+            "lemas_distintos": ", ".join(sorted(lemas_set)),
+        }
+        for stem, lemas_set in por_stem_lemas.items()
+        if len(lemas_set) > 1                     # solo los grupos conflictivos
+    ]
     return pd.DataFrame(filas)
