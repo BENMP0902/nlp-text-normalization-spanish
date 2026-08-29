@@ -17,6 +17,8 @@ DIR_RAW = RAIZ / "data" / "raw"          # el operador / de pathlib une rutas
 DIR_PROCESADO = RAIZ / "data" / "processed"
 DIR_OUTPUTS = RAIZ / "outputs"
 
+# Corpus POR DEFECTO. La CLI puede sobreescribirlo con --corpus.
+# Es un valor por defecto, no una decisión de diseño del sistema.
 ARCHIVO_CORPUS = DIR_RAW / "cap1_principito.txt"
 
 # --- Modelo -----------------------------------------------------------------
