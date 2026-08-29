@@ -137,3 +137,5 @@ temp/
 !*.example.ovpn
 
 !.vscode/settings.json
+
+outputs/
