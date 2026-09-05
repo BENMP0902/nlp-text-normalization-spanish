@@ -18,6 +18,11 @@ from src.metricas import (
     sobre_stemming,
 )
 
+from src.segmentacion import construir_documentos
+from src.vectorizacion import (construir_bow, construir_tfidf, diagnosticar_idf,
+                               terminos_discriminantes, matriz_similitud, par_mas_similar)
+from src.visualizacion import proyectar, graficar
+
 
 def resolver_corpus(indicado: Path | None) -> Path:
     """Convierte lo que el usuario escribió en una ruta utilizable.
@@ -60,6 +65,36 @@ def palabras_muestra(tokens: list, n: int = 10) -> set[str]:
     )
     return {palabra for palabra, _ in candidatas.most_common(n)}
 
+def ejecutar_vectorizacion(rutas_corpus, nlp, normalizar_fn):   # ⇦ ADAPTA: normalizar_fn
+    corpus_tokens, etiquetas = [], []
+
+    for ruta in rutas_corpus:
+        texto = Path(ruta).read_text(encoding="utf-8")          # ⇦ ADAPTA: usa src.carga
+        etiqueta = Path(ruta).stem                              # "cap1_principito"
+        for documento in construir_documentos(texto, nlp):
+            # Reutilizas TU pipeline del módulo 3. Cero duplicación de lógica.
+            tokens = normalizar_fn(documento)                   # ⇦ ADAPTA: devuelve List[str]
+            if tokens:                                          # descarta documentos vacíos
+                corpus_tokens.append(tokens)
+                etiquetas.append(etiqueta)
+
+    print(f"Documentos: {len(corpus_tokens)} | Corpus: {set(etiquetas)}")
+
+    X_bow, v_bow = construir_bow(corpus_tokens)
+    X_tfidf, v_tfidf = construir_tfidf(corpus_tokens)
+
+    print("BoW  ", X_bow.shape, f"densidad={X_bow.nnz / np.prod(X_bow.shape):.2%}")
+    print("TFIDF", X_tfidf.shape, diagnosticar_idf(v_tfidf))
+
+    i, j, s = par_mas_similar(matriz_similitud(X_tfidf))
+    print(f"Par más similar: doc {i} ({etiquetas[i]}) ↔ doc {j} ({etiquetas[j]}) | cos={s:.3f}")
+
+    tabla = terminos_discriminantes(X_tfidf, v_tfidf, etiquetas)
+    tabla.to_csv("reportes/terminos_discriminantes.csv", index=False, encoding="utf-8")
+
+    coords, var = proyectar(X_tfidf)
+    graficar(coords, etiquetas, var, "Espacio TF-IDF proyectado (LSA)",
+             Path("reportes/proyeccion_lsa.png"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -75,6 +110,8 @@ def main() -> None:
                         help="Filtra también los negadores (comportamiento del curso)")
     parser.add_argument("--sin-filtro", action="store_true",
                         help="Desactiva por completo el filtrado de stop words")
+    parser.add_argument("--vectorizar", action="store_true",
+                    help="Ejecuta el pipeline de feature extraction (módulo 4)")
     args = parser.parse_args()
 
     # Sobrescribimos config desde la CLI: permite comparar variantes sin editar
