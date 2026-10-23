@@ -42,3 +42,31 @@ NEGADORES = frozenset({
 
 FILTRAR_STOPWORDS = True       # conmutable para comparar resultados
 PRESERVAR_NEGADORES = True     # si False, reproduces el comportamiento del curso
+
+# --- Etapa 3: embeddings Word2Vec (módulo 5) ---------------------------------
+# Los hiperparámetros cambian los vectores, así que viven aquí y no en la CLI.
+W2V_VECTOR_SIZE = 100      # dimensiones; con ~60 k tokens, más dimensiones
+                           # solo añaden parámetros que el corpus no puede estimar
+W2V_VENTANA = 5            # palabras de contexto a cada lado
+W2V_MIN_COUNT = 5          # por debajo, el vector de una palabra es casi su
+                           # inicialización aleatoria: menos de 5 contextos
+W2V_SAMPLE = 1e-3          # submuestreo de palabras frecuentes (Mikolov et al.,
+                           # 2013). Sustituye al filtrado de stop words: las
+                           # degrada sin borrarlas de la ventana
+W2V_SG = 1                 # skip-gram: aprende mejor que CBOW las palabras poco
+                           # frecuentes, que en un corpus chico son casi todas
+W2V_EPOCHS = 30            # el default (5) está pensado para millones de tokens;
+                           # un libro necesita más pasadas para converger
+W2V_SEMILLA = 42
+W2V_WORKERS = 1            # con varios hilos el orden de las actualizaciones no
+                           # es determinista y la semilla deja de bastar
+                           # (documentación de gensim, Word2Vec, parámetro seed)
+
+# Umbrales de suficiencia: por debajo, el código ADVIERTE en vez de callar.
+# most_similar devuelve vecinos con cuatro decimales aunque sean ruido.
+W2V_MIN_TOKENS = 100_000   # heurística de este proyecto, no un estándar: el
+                           # artículo original entrenó con miles de millones
+W2V_MIN_ESTABILIDAD = 0.5  # Jaccard medio del top-k de vecinos entre dos
+                           # semillas. Si los vecinos cambian con la semilla,
+                           # no son propiedad del corpus sino de la inicialización
+W2V_TOP_K = 10             # vecinos por sonda en el diagnóstico y las figuras

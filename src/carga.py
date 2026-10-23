@@ -55,6 +55,14 @@ def cargar_texto(ruta: Path) -> str:
     #    web o PDF; el tokenizador lo trata como carácter, no como separador.
     texto = texto.replace("\u00a0", " ")
 
+    # 6) Doble guion ASCII → raya (U+2014). Las transcripciones ASCII (Project
+    #    Gutenberg y similares) escriben así la raya de diálogo: '--¿Y tú?--dijo'. spaCy
+    #    no separa '--', así que 'nela--', '--nela' y 'nela' acababan en el
+    #    vocabulario como tres palabras. Y tampoco separa la raya pegada por
+    #    ambos lados ('equivocarme—murmuró'): de ahí los espacios. Los espacios
+    #    sobrantes se tokenizan como espacio y es_contenido los descarta.
+    texto = texto.replace("--", " \u2014 ")
+
     if not texto.strip():
         raise ValueError(f"{ruta} está vacío o solo tiene espacios.")
 
