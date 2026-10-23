@@ -204,3 +204,10 @@ def test_granularidad_desconocida_lanza_valueerror():
         main.documentos_lematizados("texto", "capitulo")
     for clave in main.ESTRATEGIAS:
         assert clave in str(excinfo.value)
+
+
+def test_cli_expone_etapa_de_embeddings():
+    """--embeddings existe como bandera independiente."""
+    import main
+    args = main.construir_parser().parse_args(["--embeddings"])
+    assert args.embeddings and not args.vectorizar

@@ -11,7 +11,7 @@ matplotlib.use("Agg")   # Backend sin ventana. OBLIGATORIO en WSL2 sin servidor 
                         # Debe ir ANTES de importar pyplot o no surte efecto.
 import matplotlib.pyplot as plt          # noqa: E402  (import tras matplotlib.use, a propósito)
 import numpy as np                        # noqa: E402
-from sklearn.decomposition import TruncatedSVD   # noqa: E402
+from sklearn.decomposition import PCA, TruncatedSVD   # noqa: E402
 
 
 def proyectar(X, n_componentes: int = 2, semilla: int = 42) -> Tuple[np.ndarray, np.ndarray]:
@@ -36,7 +36,29 @@ def proyectar(X, n_componentes: int = 2, semilla: int = 42) -> Tuple[np.ndarray,
     return coords, svd.explained_variance_ratio_
 
 
-def graficar(coords, etiquetas, varianza, titulo: str, ruta: Path) -> Path:
+def proyectar_pca(M, n_componentes: int = 2, semilla: int = 42) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Proyecta una matriz DENSA (embeddings) con PCA.
+
+    Es el caso opuesto al de proyectar(). Allá la matriz es dispersa y
+    centrarla la densificaría; aquí ya es densa y centrarla no cuesta nada.
+    Además centrar es necesario: los embeddings de Word2Vec comparten un
+    vector medio no nulo, y sin restarlo (TruncatedSVD) la primera componente
+    apunta hacia esa media, que es común a todo el vocabulario y no distingue
+    ninguna palabra de otra.
+
+    La varianza explicada es relativa a las filas de M, es decir, a las
+    palabras que se grafican, no al vocabulario completo.
+    """
+    pca = PCA(n_components=n_componentes, random_state=semilla)
+    coords = pca.fit_transform(np.asarray(M))
+    return coords, pca.explained_variance_ratio_
+
+
+def graficar(coords, etiquetas, varianza, titulo: str, ruta: Path,
+             anotaciones: Sequence[str] | None = None,
+             titulo_leyenda: str = "Corpus de origen",
+             prefijo_eje: str = "Componente latente") -> Path:
     """
     Scatter 2D con la varianza explicada EN EL TÍTULO.
 
@@ -44,6 +66,9 @@ def graficar(coords, etiquetas, varianza, titulo: str, ruta: Path) -> Path:
     gráfico representa el 12% de la información, cualquier agrupamiento visible
     puede ser artefacto de proyección. El número es la defensa contra el propio
     sistema visual del lector.
+
+    `anotaciones` rotula cada punto (las palabras, en la etapa 3). Los demás
+    parámetros opcionales conservan por defecto el gráfico de la etapa 2.
     """
     ruta = Path(ruta)
     fig, ax = plt.subplots(figsize=(9, 7), constrained_layout=True)
@@ -53,12 +78,17 @@ def graficar(coords, etiquetas, varianza, titulo: str, ruta: Path) -> Path:
         ax.scatter(coords[m, 0], coords[m, 1],
                    s=80, alpha=0.85, edgecolors="k", linewidths=0.5, label=clase)
 
+    if anotaciones is not None:
+        for (x, y), texto in zip(coords, anotaciones):
+            ax.annotate(texto, (x, y), xytext=(4, 4), textcoords="offset points",
+                        fontsize=8)
+
     ax.axhline(0, color="grey", lw=0.5, ls="--")         # ejes de referencia en el origen
     ax.axvline(0, color="grey", lw=0.5, ls="--")
-    ax.set_xlabel(f"Componente latente 1 ({varianza[0]:.1%} de la varianza)")
-    ax.set_ylabel(f"Componente latente 2 ({varianza[1]:.1%} de la varianza)")
+    ax.set_xlabel(f"{prefijo_eje} 1 ({varianza[0]:.1%} de la varianza)")
+    ax.set_ylabel(f"{prefijo_eje} 2 ({varianza[1]:.1%} de la varianza)")
     ax.set_title(f"{titulo}\nVarianza explicada acumulada: {varianza.sum():.1%}")
-    ax.legend(title="Corpus de origen")
+    ax.legend(title=titulo_leyenda)
 
     ruta.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(ruta, dpi=150)

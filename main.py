@@ -3,10 +3,12 @@ main.py — Orquestador / CLI. Punto de entrada único del pipeline.
 
 Etapa 1 (módulo 3): normalización, lematización y métricas de vocabulario.
 Etapa 2 (módulo 4): vectorización BoW / TF-IDF y proyección del espacio.
+Etapa 3 (módulo 5): embeddings Word2Vec y proyección PCA del espacio léxico.
 
-Las dos etapas se invocan por separado: --vectorizar no encadena con la etapa 1
-porque operan sobre unidades distintas (un corpus vs. varios) y mezclarlas
-produciría una salida de consola imposible de leer.
+Las etapas se invocan por separado: --vectorizar y --embeddings no encadenan
+con la etapa 1 porque operan sobre unidades distintas (un corpus vs. varios;
+documentos vs. palabras) y mezclarlas produciría una salida de consola
+imposible de leer.
 """
 import argparse
 from collections import Counter
@@ -39,7 +41,8 @@ from src.vectorizacion import (
     par_mas_similar,
     similitud_intra_vs_inter,
 )
-from src.visualizacion import proyectar, graficar
+from src.visualizacion import proyectar, proyectar_pca, graficar
+from src import embeddings as emb
 
 # Directorio de figuras versionadas. Se resuelve desde la ubicación de este
 # archivo y no desde el cwd: `python main.py` desde otro directorio no rompe.
@@ -243,6 +246,99 @@ def ejecutar_vectorizacion(rutas_corpus: list[Path],
         print("\n(sin --guardar: no se escribieron figura ni CSV)")
 
 
+# =====================================================================
+# ETAPA 3 — Embeddings Word2Vec (módulo 5)
+# =====================================================================
+
+# Palabras graficadas en la figura de frecuencia y sondas del diagnóstico.
+N_FRECUENTES = 60
+N_SONDAS = 6
+
+
+def ejecutar_embeddings(rutas_corpus: list[Path], guardar: bool = False) -> None:
+    """Entrena Word2Vec sobre los corpus, diagnostica su suficiencia y grafica."""
+    if aviso := emb.verificar_semilla_hash():
+        print(aviso)
+
+    oraciones: list[list[str]] = []
+    pos_por_lema: dict = {}
+    for ruta in rutas_corpus:
+        # cargar_texto() valida encoding y mojibake igual que en las etapas 1 y 2.
+        o, pos = emb.preparar_corpus(cargar_texto(ruta))
+        oraciones.extend(o)
+        for lema, conteo in pos.items():
+            pos_por_lema.setdefault(lema, Counter()).update(conteo)
+        print(f"[embeddings] {ruta.name}: {len(o)} oraciones, "
+              f"{sum(map(len, o)):,} tokens")
+
+    modelo = emb.entrenar(oraciones)
+    contenido = emb.palabras_de_contenido(modelo, pos_por_lema)
+    if len(contenido) < N_SONDAS:
+        raise ValueError(
+            f"Solo {len(contenido)} palabras de contenido superan min_count="
+            f"{config.W2V_MIN_COUNT}. El corpus no alcanza para la etapa 3."
+        )
+    sondas = contenido[:N_SONDAS]
+
+    print("\n=== Etapa 3: embeddings Word2Vec ===")
+    print(f"Corpus: {[r.name for r in rutas_corpus]}")
+    print(f"Hiperparámetros: dim={config.W2V_VECTOR_SIZE} ventana={config.W2V_VENTANA} "
+          f"min_count={config.W2V_MIN_COUNT} sample={config.W2V_SAMPLE} "
+          f"sg={config.W2V_SG} epochs={config.W2V_EPOCHS} seed={config.W2V_SEMILLA} "
+          f"workers={config.W2V_WORKERS}")
+
+    diag = emb.diagnosticar_suficiencia(modelo, oraciones, sondas)
+    avisos = diag.pop("avisos")
+    print(f"Diagnóstico: {diag}")
+    for a in avisos:
+        print(a)
+
+    print(f"\n=== Vecinos más cercanos (top {config.W2V_TOP_K}, coseno) ===")
+    for s in sondas:
+        vecinos = modelo.wv.most_similar(s, topn=config.W2V_TOP_K)
+        print(f"{s:>12} → " + ", ".join(f"{w} ({c:.4f})" for w, c in vecinos))
+    if avisos:
+        print("  ↑ con los avisos de arriba activos, estos decimales NO son "
+              "evidencia: la lista cambia con la semilla.")
+
+    # --- Proyecciones (sin stop words: ver stop_words_para_graficar) ---
+    frecuentes = contenido[:N_FRECUENTES]
+    coords_f, var_f = proyectar_pca(emb.matriz_de(modelo, frecuentes))
+    palabras_v, grupos_v = emb.vecindarios(modelo, sondas, set(contenido))
+    coords_v, var_v = proyectar_pca(emb.matriz_de(modelo, palabras_v))
+    print(f"\nVarianza explicada — frecuentes: {var_f.round(4)} (acum. {var_f.sum():.1%}) "
+          f"| vecindarios: {var_v.round(4)} (acum. {var_v.sum():.1%})")
+
+    if guardar:
+        destino = config.DIR_OUTPUTS / "embeddings"
+        destino.mkdir(parents=True, exist_ok=True)
+        modelo.save(str(destino / "word2vec.model"))     # gensim exige str
+        texto = emb.guardar_texto_procesado(
+            oraciones, config.DIR_PROCESADO / "corpus_embeddings.txt")
+
+        f1 = graficar(
+            coords_f, [emb.pos_dominante(w, pos_por_lema) for w in frecuentes], var_f,
+            f"Word2Vec — {len(frecuentes)} palabras de contenido más frecuentes (PCA)\n"
+            f"varianza relativa a las palabras graficadas, no al vocabulario",
+            DIR_DOCS / "embeddings_frecuentes.png",
+            anotaciones=frecuentes, titulo_leyenda="POS dominante",
+            prefijo_eje="Componente principal",
+        )
+        f2 = graficar(
+            coords_v, grupos_v, var_v,
+            f"Word2Vec — vecindarios de {len(sondas)} sondas, "
+            f"top {config.W2V_TOP_K} vecinos de contenido (PCA)\n"
+            f"varianza relativa a las palabras graficadas, no al vocabulario",
+            DIR_DOCS / "embeddings_vecindarios.png",
+            anotaciones=palabras_v, titulo_leyenda="Sonda",
+            prefijo_eje="Componente principal",
+        )
+        print(f"\nModelo en {destino} · texto procesado en {texto} · "
+              f"figuras en {f1} y {f2}")
+    else:
+        print("\n(sin --guardar: no se escribieron modelo, texto ni figuras)")
+
+
 def rutas_de_etapa(corpus: Path | None, etapa: str) -> list[Path]:
     """Corpus de las etapas multi-corpus: todos los de data/raw/ o solo --corpus."""
     if corpus is not None:
@@ -262,7 +358,8 @@ def rutas_de_etapa(corpus: Path | None, etapa: str) -> list[Path]:
 def construir_parser() -> argparse.ArgumentParser:
     """Define la CLI. Separada de main() para que los tests puedan inspeccionarla."""
     parser = argparse.ArgumentParser(
-        description="Pipeline de normalización (etapa 1) y vectorización (etapa 2)"
+        description="Pipeline de normalización (etapa 1), vectorización (etapa 2) "
+                    "y embeddings (etapa 3)"
     )
     parser.add_argument("--corpus", type=Path, default=None,
                         help="Ruta al .txt a procesar. Si es solo un nombre, se "
@@ -276,6 +373,9 @@ def construir_parser() -> argparse.ArgumentParser:
                         help="Desactiva por completo el filtrado de stop words")
     parser.add_argument("--vectorizar", action="store_true",
                         help="Ejecuta la etapa 2 (feature extraction) sobre data/raw/")
+    parser.add_argument("--embeddings", action="store_true",
+                        help="Ejecuta la etapa 3 (Word2Vec) sobre data/raw/. "
+                             "Para reproducibilidad: PYTHONHASHSEED=0 python main.py --embeddings")
     # choices sale de ESTRATEGIAS: la CLI no puede ofrecer un valor que el
     # código no sepa despachar, ni al revés.
     parser.add_argument("--granularidad", choices=list(ESTRATEGIAS), default="parrafo",
@@ -303,6 +403,16 @@ def main() -> None:
         config.PRESERVAR_NEGADORES = False
     if args.sin_filtro:
         config.FILTRAR_STOPWORDS = False
+
+    if args.vectorizar and args.embeddings:
+        raise SystemExit("--vectorizar y --embeddings son etapas separadas: "
+                         "invócalas en corridas distintas.")
+
+    # --- Etapa 3: ruta alterna con retorno temprano ---
+    if args.embeddings:
+        ejecutar_embeddings(rutas_de_etapa(args.corpus, "--embeddings"),
+                            guardar=args.guardar)
+        return   # la etapa 3 no encadena con ninguna otra
 
     # --- Etapa 2: ruta alterna con retorno temprano ---
     if args.vectorizar:

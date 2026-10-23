@@ -1,4 +1,5 @@
 """Pipeline de normalización: carga del modelo, filtrado y lematización."""
+from collections.abc import Iterator
 from functools import lru_cache
 
 import spacy
@@ -81,10 +82,37 @@ def procesar(texto: str) -> Doc:
     if len(texto) > nlp.max_length:
         raise ValueError(
             f"Texto de {len(texto)} chars supera nlp.max_length={nlp.max_length}. "
-            "Procesa por capítulos con nlp.pipe()."
+            "Trocéalo en párrafos y usa procesar_por_partes()."
         )
 
     return nlp(texto)
+
+
+def procesar_por_partes(partes: list[str], batch_size: int = 64) -> Iterator[Doc]:
+    """Procesa una lista de fragmentos en lote con nlp.pipe().
+
+    Las partes deben cortarse en fronteras de párrafo, nunca a mitad de
+    oración: un corte arbitrario inventa un final de oración donde no lo hay
+    y el parser construye un árbol falso sobre él.
+
+    Por qué trocear aunque el texto quepa en nlp.max_length: un Doc por
+    párrafo mantiene acotado el pico de memoria del parser, y nlp.pipe()
+    agrupa los fragmentos en lotes en vez de reconstruir el estado del
+    pipeline en cada llamada. Devuelve un generador: los Doc se consumen y
+    se liberan uno a uno.
+    """
+    nlp = cargar_modelo(config.MODELO_SPACY, config.COMPONENTES_DESACTIVADOS)
+
+    # La guarda de procesar() aplica también por parte: un "párrafo" de más de
+    # un millón de caracteres significa que el .txt no tiene líneas en blanco.
+    for parte in partes:
+        if len(parte) > nlp.max_length:
+            raise ValueError(
+                f"Una parte de {len(parte)} chars supera nlp.max_length="
+                f"{nlp.max_length}. ¿El texto carece de líneas en blanco?"
+            )
+
+    return nlp.pipe(partes, batch_size=batch_size)
 
 
 def lematizar(doc: Doc) -> tuple[list[str], list[tuple[str, str, str]]]:
@@ -118,7 +146,7 @@ def lematizar(doc: Doc) -> tuple[list[str], list[tuple[str, str, str]]]:
     return lemas, transformaciones
 
 
-def construir_corpus(doc: Doc) -> list[list[str]]:
+def construir_corpus(doc: Doc, stop_words: frozenset | None = None) -> list[list[str]]:
     """Segmenta en oraciones y lematiza cada una: el insumo del módulo 4.
 
     doc.sents requiere el parser activo. Si desactivaras 'parser' en config,
@@ -128,9 +156,15 @@ def construir_corpus(doc: Doc) -> list[list[str]]:
     oraciones directo al vectorizador sin re-tokenizar. Re-tokenizar con el
     tokenizador por defecto de scikit-learn después de haber usado spaCy es
     incoherencia de pipeline: dos criterios distintos sobre el mismo texto.
+
+    `stop_words=None` aplica la lista efectiva (comportamiento de las etapas
+    1 y 2). La etapa 3 pasa frozenset(): Word2Vec necesita la ventana de
+    contexto íntegra, y con un conjunto vacío es_contenido sigue descartando
+    puntuación, números y URLs sin tocar las palabras función.
     """
-    nlp = cargar_modelo(config.MODELO_SPACY, config.COMPONENTES_DESACTIVADOS)
-    stop_words = stop_words_efectivas(nlp)
+    if stop_words is None:
+        nlp = cargar_modelo(config.MODELO_SPACY, config.COMPONENTES_DESACTIVADOS)
+        stop_words = stop_words_efectivas(nlp)
 
     corpus = []
     for oracion in doc.sents:
