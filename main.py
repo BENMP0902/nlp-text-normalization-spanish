@@ -1,6 +1,18 @@
+"""
+main.py — Orquestador / CLI. Punto de entrada único del pipeline.
+
+Etapa 1 (módulo 3): normalización, lematización y métricas de vocabulario.
+Etapa 2 (módulo 4): vectorización BoW / TF-IDF y proyección del espacio.
+
+Las dos etapas se invocan por separado: --vectorizar no encadena con la etapa 1
+porque operan sobre unidades distintas (un corpus vs. varios) y mezclarlas
+produciría una salida de consola imposible de leer.
+"""
 import argparse
 from collections import Counter
 from pathlib import Path
+
+import numpy as np                          # requerido por np.savetxt en la etapa 2
 
 from src import config
 from src.carga import cargar_texto, diagnostico
@@ -17,11 +29,23 @@ from src.metricas import (
     type_token_ratio,
     sobre_stemming,
 )
-
 from src.segmentacion import construir_documentos
-from src.vectorizacion import (construir_bow, construir_tfidf, diagnosticar_idf,
-                               terminos_discriminantes, matriz_similitud, par_mas_similar)
+from src.vectorizacion import (
+    construir_bow,
+    construir_tfidf,
+    diagnosticar,                           # nombre real de la función (no diagnosticar_idf)
+    terminos_discriminantes,
+    matriz_similitud,
+    par_mas_similar,
+    similitud_intra_vs_inter,
+)
 from src.visualizacion import proyectar, graficar
+
+# Directorio de figuras versionadas. Se resuelve desde la ubicación de este
+# archivo y no desde el cwd: `python main.py` desde otro directorio no rompe.
+# Distinción frente a outputs/: docs/ es documentación referenciada por el
+# README y se versiona; outputs/ son artefactos regenerables y no se versiona.
+DIR_DOCS = Path(__file__).resolve().parent / "docs"
 
 
 def resolver_corpus(indicado: Path | None) -> Path:
@@ -65,40 +89,119 @@ def palabras_muestra(tokens: list, n: int = 10) -> set[str]:
     )
     return {palabra for palabra, _ in candidatas.most_common(n)}
 
-def ejecutar_vectorizacion(rutas_corpus, nlp, normalizar_fn):   # ⇦ ADAPTA: normalizar_fn
-    corpus_tokens, etiquetas = [], []
+
+# =====================================================================
+# ETAPA 2 — Vectorización (módulo 4)
+# =====================================================================
+
+def documentos_lematizados(texto: str, granularidad: str) -> list[list[str]]:
+    """Aplica la etapa 1 sobre el texto y devuelve documentos como listas de lemas.
+
+    La granularidad es el PARÁMETRO DEL EXPERIMENTO, no un detalle interno:
+
+    - "oracion": reproduce el material de referencia. construir_corpus() ya lo
+      implementa desde el módulo 3. Con documentos tan cortos, df≈1 para casi
+      todo el vocabulario, el IDF pierde varianza y TF-IDF degenera en BoW
+      binario L2-normalizado.
+    - "parrafo": documentos con masa suficiente para que el IDF discrimine.
+
+    Exponer ambas rutas convierte una afirmación del README en una medición.
+    Es el mismo patrón de --sin-negadores: reproducir el comportamiento del
+    material y cuantificar la diferencia.
+    """
+    if granularidad == "oracion":
+        return construir_corpus(procesar(texto))
+
+    # `procesar` se pasa como el callable nlp. construir_documentos solo lo usa
+    # en la ruta de fallback, cuando el .txt no trae párrafos separados por
+    # línea en blanco y hay que segmentar en bloques de oraciones.
+    documentos = construir_documentos(texto, procesar)
+
+    # Una llamada a spaCy por documento. Aceptable con estos corpus; para
+    # volumen real, nlp.pipe(textos, batch_size=...) procesa en lote y evita
+    # el overhead de reconstruir el pipeline en cada invocación.
+    # lematizar() devuelve (lemas, transformaciones); aquí solo interesa [0].
+    return [lematizar(procesar(d))[0] for d in documentos]
+
+
+def ejecutar_vectorizacion(rutas_corpus: list[Path],
+                           granularidad: str = "parrafo",
+                           guardar: bool = False) -> None:
+    """Construye el espacio vectorial sobre todos los corpus y lo diagnostica."""
+    corpus_tokens: list[list[str]] = []
+    etiquetas: list[str] = []
 
     for ruta in rutas_corpus:
-        texto = Path(ruta).read_text(encoding="utf-8")          # ⇦ ADAPTA: usa src.carga
-        etiqueta = Path(ruta).stem                              # "cap1_principito"
-        for documento in construir_documentos(texto, nlp):
-            # Reutilizas TU pipeline del módulo 3. Cero duplicación de lógica.
-            tokens = normalizar_fn(documento)                   # ⇦ ADAPTA: devuelve List[str]
-            if tokens:                                          # descarta documentos vacíos
+        # cargar_texto() y no read_text(): valida encoding y detecta mojibake.
+        # La doble codificación es UTF-8 válido y no lanza ninguna excepción.
+        texto = cargar_texto(ruta)
+        for tokens in documentos_lematizados(texto, granularidad):
+            if tokens:                       # descarta documentos vacíos tras el filtrado
                 corpus_tokens.append(tokens)
-                etiquetas.append(etiqueta)
+                etiquetas.append(ruta.stem)  # "cap1_principito" → etiqueta de origen
 
-    print(f"Documentos: {len(corpus_tokens)} | Corpus: {set(etiquetas)}")
+    # Guarda de entrada: con menos de 2 documentos el IDF es indefinido.
+    # Fallar aquí es preferible a producir una matriz sin significado.
+    if len(corpus_tokens) < 2:
+        raise ValueError(
+            f"Solo {len(corpus_tokens)} documento(s). La etapa 2 requiere al menos 2; "
+            f"agrega corpus a data/raw/ o baja min_caracteres en segmentacion.py"
+        )
+
+    print(f"\n=== Etapa 2: vectorización (granularidad: {granularidad}) ===")
+    print(f"Documentos: {len(corpus_tokens)} | Corpus: {sorted(set(etiquetas))}")
 
     X_bow, v_bow = construir_bow(corpus_tokens)
     X_tfidf, v_tfidf = construir_tfidf(corpus_tokens)
 
-    print("BoW  ", X_bow.shape, f"densidad={X_bow.nnz / np.prod(X_bow.shape):.2%}")
-    print("TFIDF", X_tfidf.shape, diagnosticar_idf(v_tfidf))
+    print(f"BoW      {diagnosticar(X_bow, v_bow)}")
+    print(f"TF-IDF   {diagnosticar(X_tfidf, v_tfidf)}")
+    print("  ↑ idf_std < 0.25 significa que el IDF no discrimina: documentos "
+          "demasiado cortos o demasiado pocos.")
 
-    i, j, s = par_mas_similar(matriz_similitud(X_tfidf))
-    print(f"Par más similar: doc {i} ({etiquetas[i]}) ↔ doc {j} ({etiquetas[j]}) | cos={s:.3f}")
+    # --- Prueba cuantitativa de la hipótesis del experimento ---
+    S = matriz_similitud(X_tfidf)
+    i, j, s = par_mas_similar(S)
+    print(f"\nPar más similar: doc {i} ({etiquetas[i]}) ↔ doc {j} ({etiquetas[j]}) | cos={s:.3f}")
+    print(f"Similitud media: {similitud_intra_vs_inter(S, etiquetas)}")
+    print("  ↑ si intra_corpus no supera claramente a inter_corpus, la "
+          "vectorización no capturó tema y el gráfico no debe interpretarse.")
 
     tabla = terminos_discriminantes(X_tfidf, v_tfidf, etiquetas)
-    tabla.to_csv("reportes/terminos_discriminantes.csv", index=False, encoding="utf-8")
+    print("\n=== Términos más discriminantes (top 5 por corpus) ===")
+    print(tabla[tabla["rango"] <= 5].to_string(index=False))
 
     coords, var = proyectar(X_tfidf)
-    graficar(coords, etiquetas, var, "Espacio TF-IDF proyectado (LSA)",
-             Path("reportes/proyeccion_lsa.png"))
+    print(f"\nVarianza explicada por componente: {var.round(4)} "
+          f"| acumulada: {var.sum():.1%}")
+
+    if guardar:
+        # El nombre de archivo lleva la granularidad: dos corridas no se pisan
+        # y el nombre documenta con qué configuración se generó cada artefacto.
+        destino = config.DIR_OUTPUTS / "vectorizacion"
+        destino.mkdir(parents=True, exist_ok=True)
+        tabla.to_csv(destino / f"terminos_{granularidad}.csv",
+                     index=False, encoding="utf-8")
+        np.savetxt(destino / f"similitud_{granularidad}.csv",
+                   S, delimiter=",", fmt="%.4f")
+
+        figura = graficar(
+            coords, etiquetas, var,
+            f"Espacio TF-IDF proyectado (LSA) — granularidad: {granularidad}",
+            DIR_DOCS / f"proyeccion_lsa_{granularidad}.png",
+        )
+        print(f"\nTablas en {destino} · figura en {figura}")
+    else:
+        print("\n(sin --guardar: no se escribieron figura ni CSV)")
+
+
+# =====================================================================
+# CLI
+# =====================================================================
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Normalización y lematización (Módulo 3)"
+        description="Pipeline de normalización (etapa 1) y vectorización (etapa 2)"
     )
     parser.add_argument("--corpus", type=Path, default=None,
                         help="Ruta al .txt a procesar. Si es solo un nombre, se "
@@ -111,16 +214,41 @@ def main() -> None:
     parser.add_argument("--sin-filtro", action="store_true",
                         help="Desactiva por completo el filtrado de stop words")
     parser.add_argument("--vectorizar", action="store_true",
-                    help="Ejecuta el pipeline de feature extraction (módulo 4)")
+                        help="Ejecuta la etapa 2 (feature extraction) sobre data/raw/")
+    parser.add_argument("--granularidad", choices=["bloque", "oracion"], default="bloque",
+                    help="Unidad que constituye un documento. 'bloque' agrupa N oraciones; "
+                         "'oracion' reproduce el material de referencia.")
+    parser.add_argument("--oraciones-por-bloque", type=int, default=4,
+                    help="Tamaño del bloque cuando --granularidad=bloque")
     args = parser.parse_args()
 
     # Sobrescribimos config desde la CLI: permite comparar variantes sin editar
     # código. argparse convierte --sin-negadores en args.sin_negadores (guion
     # bajo), porque los guiones no son válidos en identificadores de Python.
+    # Va ANTES de cualquier procesamiento: procesar() lee config al ejecutarse,
+    # así que ambas etapas heredan la configuración elegida.
     if args.sin_negadores:
         config.PRESERVAR_NEGADORES = False
     if args.sin_filtro:
         config.FILTRAR_STOPWORDS = False
+
+    # --- Etapa 2: ruta alterna con retorno temprano ---
+    if args.vectorizar:
+        if args.corpus is not None:
+            # --corpus restringe la etapa 2 a un solo texto. Se permite, pero con
+            # un corpus el IDF tiene mucho menos sobre qué discriminar.
+            rutas = [resolver_corpus(args.corpus)]
+            print("[aviso] --vectorizar con un solo corpus: el IDF pierde poder "
+                  "discriminante. Omite --corpus para usar todos los de data/raw/.")
+        else:
+            rutas = sorted(config.DIR_RAW.glob("*.txt"))
+            if not rutas:
+                raise FileNotFoundError(f"No hay archivos .txt en {config.DIR_RAW}")
+
+        ejecutar_vectorizacion(rutas,
+                               granularidad=args.granularidad,
+                               guardar=args.guardar)
+        return   # la etapa 2 no encadena con la etapa 1
 
     # --- 1. Carga ---
     ruta = resolver_corpus(args.corpus)
@@ -172,7 +300,7 @@ def main() -> None:
     print(df_sobre.to_string(index=False) if not df_sobre.empty
           else "Sin casos en este corpus.")
 
-    # --- 5. Corpus por oración (insumo del módulo 4) ---
+    # --- 5. Corpus por oración (insumo de la etapa 2) ---
     corpus = construir_corpus(doc)
     print(f"\nOraciones con contenido: {len(corpus)}")
     print("Primera oración lematizada:", corpus[0] if corpus else "—")

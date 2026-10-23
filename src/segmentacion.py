@@ -1,19 +1,24 @@
 """
 segmentacion.py — Convierte texto crudo en una lista de DOCUMENTOS.
 
-Responsabilidad única (Single Responsibility): decidir qué unidad de texto
-constituye un documento. Es la decisión que gobierna el comportamiento del IDF,
-así que vive en su propio módulo y no escondida dentro del vectorizador.
+Responsabilidad única: decidir qué unidad de texto constituye un documento.
+Es la decisión que gobierna el comportamiento del IDF, así que vive en su propio
+módulo y no escondida dentro del vectorizador.
+
+Distinción frente a normalizacion.py: ahí se segmenta en ORACIONES, que es una
+operación lingüística dependiente del parser de spaCy. Aquí se segmenta en
+DOCUMENTOS, que es una decisión de diseño experimental.
 """
-from __future__ import annotations          # anotaciones perezosas (PEP 563); útil <3.10
+from __future__ import annotations
+
 import re
 from typing import List
 
-# Un párrafo se separa por una línea en blanco: \n, espacios opcionales, \n.
-# Compilamos el patrón una sola vez a nivel de módulo (se reutiliza en cada llamada).
+# Un párrafo se delimita por una línea en blanco: \n, whitespace opcional, \n.
+# Se compila una sola vez a nivel de módulo: el patrón se reutiliza en cada llamada.
 _SEP_PARRAFO = re.compile(r"\n\s*\n")
 
-# Colapsa cualquier racha de whitespace (saltos de línea internos, tabs) a un espacio.
+# Colapsa cualquier racha de whitespace (saltos internos, tabs) a un solo espacio.
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -21,13 +26,13 @@ def segmentar_en_parrafos(texto: str, min_caracteres: int = 150) -> List[str]:
     """
     Parte el texto por líneas en blanco.
 
-    min_caracteres descarta fragmentos demasiado cortos (títulos, números de
+    `min_caracteres` descarta fragmentos demasiado cortos (títulos, números de
     capítulo, líneas sueltas de diálogo). Documentos muy cortos reintroducen
     exactamente el problema que queremos evitar: df≈1 e IDF sin varianza.
     """
-    bloques = _SEP_PARRAFO.split(texto)                       # lista de bloques crudos
-    limpios = [_WHITESPACE.sub(" ", b).strip() for b in bloques]  # normaliza whitespace
-    return [p for p in limpios if len(p) >= min_caracteres]   # filtra por longitud
+    bloques = _SEP_PARRAFO.split(texto)                            # bloques crudos
+    limpios = [_WHITESPACE.sub(" ", b).strip() for b in bloques]   # whitespace normalizado
+    return [p for p in limpios if len(p) >= min_caracteres]        # filtro por longitud
 
 
 def segmentar_en_bloques(doc, oraciones_por_bloque: int = 4) -> List[str]:
@@ -47,19 +52,24 @@ def segmentar_en_bloques(doc, oraciones_por_bloque: int = 4) -> List[str]:
     ]
 
 
-def construir_documentos(texto: str, nlp, min_documentos: int = 8) -> List[str]:
+def construir_documentos(texto: str, nlp, min_documentos: int = 6) -> List[str]:
     """
     Estrategia con degradación controlada (graceful degradation):
-    1) intenta párrafos;
-    2) si salen pocos, cae a bloques de oraciones.
+      1) intenta párrafos;
+      2) si salen pocos, cae a bloques de oraciones.
 
-    Devolver pocos documentos no lanza excepción, pero arruina el IDF en
-    silencio. Por eso la verificación es explícita y no un supuesto.
+    Devolver pocos documentos no lanza ninguna excepción, pero arruina el IDF en
+    silencio. Por eso la verificación es explícita y se reporta por consola.
     """
     documentos = segmentar_en_parrafos(texto)
     if len(documentos) >= min_documentos:
+        print(f"[segmentacion] {len(documentos)} documentos por párrafo.")
         return documentos
 
-    # El .txt no tenía estructura de párrafos utilizable → plan B.
-    print(f"[segmentacion] Solo {len(documentos)} párrafos; uso bloques de oraciones.")
-    return segmentar_en_bloques(nlp(texto))
+    print(
+        f"[segmentacion] Solo {len(documentos)} párrafos "
+        f"(mínimo {min_documentos}); uso bloques de oraciones."
+    )
+    documentos = segmentar_en_bloques(nlp(texto))
+    print(f"[segmentacion] {len(documentos)} documentos por bloque de oraciones.")
+    return documentos
