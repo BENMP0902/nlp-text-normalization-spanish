@@ -174,6 +174,19 @@ def documentos_lematizados(texto: str, granularidad: str,
     return ESTRATEGIAS[granularidad](texto, oraciones_por_bloque)
 
 
+def sufijo_configuracion(granularidad: str, oraciones_por_bloque: int) -> str:
+    """Identificador de la configuración para nombres de archivo y títulos.
+
+    Con 'bloque', N cambia los documentos y por tanto todos los resultados:
+    sin N en el nombre, una corrida con 8 sobrescribía la de 4 sin aviso.
+    Las otras granularidades no dependen de N (salvo el respaldo automático
+    de 'parrafo', que se decide por corpus en tiempo de ejecución).
+    """
+    if granularidad == "bloque":
+        return f"bloque{oraciones_por_bloque}"
+    return granularidad
+
+
 def ejecutar_vectorizacion(rutas_corpus: list[Path],
                            granularidad: str = "parrafo",
                            guardar: bool = False,
@@ -227,19 +240,20 @@ def ejecutar_vectorizacion(rutas_corpus: list[Path],
           f"| acumulada: {var.sum():.1%}")
 
     if guardar:
-        # El nombre de archivo lleva la granularidad: dos corridas no se pisan
+        # El nombre de archivo lleva la configuración: dos corridas no se pisan
         # y el nombre documenta con qué configuración se generó cada artefacto.
+        sufijo = sufijo_configuracion(granularidad, oraciones_por_bloque)
         destino = config.DIR_OUTPUTS / "vectorizacion"
         destino.mkdir(parents=True, exist_ok=True)
-        tabla.to_csv(destino / f"terminos_{granularidad}.csv",
+        tabla.to_csv(destino / f"terminos_{sufijo}.csv",
                      index=False, encoding="utf-8")
-        np.savetxt(destino / f"similitud_{granularidad}.csv",
+        np.savetxt(destino / f"similitud_{sufijo}.csv",
                    S, delimiter=",", fmt="%.4f")
 
         figura = graficar(
             coords, etiquetas, var,
-            f"Espacio TF-IDF proyectado (LSA) — granularidad: {granularidad}",
-            DIR_DOCS / f"proyeccion_lsa_{granularidad}.png",
+            f"Espacio TF-IDF proyectado (LSA) — granularidad: {sufijo}",
+            DIR_DOCS / f"proyeccion_lsa_{sufijo}.png",
         )
         print(f"\nTablas en {destino} · figura en {figura}")
     else:

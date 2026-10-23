@@ -206,6 +206,22 @@ def test_granularidad_desconocida_lanza_valueerror():
         assert clave in str(excinfo.value)
 
 
+# ---------------------------------------------------------------------------
+# ¿Dos configuraciones distintas producen archivos distintos?
+# ---------------------------------------------------------------------------
+
+def test_sufijo_de_bloque_incluye_oraciones_por_bloque():
+    """Con 'bloque', N forma parte del nombre de archivo.
+
+    Antes, `--granularidad bloque` con 4 y con 8 escribían el mismo
+    proyeccion_lsa_bloque.png y la segunda corrida borraba la primera.
+    """
+    import main
+    assert main.sufijo_configuracion("bloque", 4) != main.sufijo_configuracion("bloque", 8)
+    assert main.sufijo_configuracion("parrafo", 4) == "parrafo"
+    assert main.sufijo_configuracion("oracion", 8) == "oracion"
+
+
 def test_cli_expone_etapa_de_embeddings():
     """--embeddings existe como bandera independiente."""
     import main
