@@ -1,6 +1,6 @@
 # nlp-text-normalization-spanish
 
-Pipeline reproducible de **normalización, lematización y vectorización de texto en español** con spaCy y scikit-learn, construido para evaluar empíricamente el efecto de cada etapa del preprocesamiento sobre el vocabulario resultante y sobre el espacio vectorial que se construye a partir de él.
+Pipeline reproducible de **normalización, lematización, vectorización y embeddings de texto en español** con spaCy, scikit-learn y gensim, construido para evaluar empíricamente el efecto de cada etapa del preprocesamiento sobre el vocabulario resultante y sobre el espacio vectorial que se construye a partir de él.
 
 El proyecto no se limita a ejecutar el pipeline: **mide** su efecto, **documenta** sus fallos y **verifica** con tests que las decisiones de diseño se cumplen.
 
@@ -37,11 +37,14 @@ data/raw/*.txt
       ▼
   vectorizacion.py ................. BoW + TF-IDF → matriz documento-término
       │                                     (Etapa 2 — módulo 4)
+      ├──────────────► embeddings.py ..... Word2Vec → un vector denso por palabra
+      │                                     (Etapa 3 — módulo 5)
       ▼
-  visualizacion.py ................. TruncatedSVD (LSA) → proyección 2D
+  visualizacion.py ................. TruncatedSVD (LSA) para documentos,
+                                     PCA para embeddings → proyección 2D
 ```
 
-La frontera entre las dos etapas es la lista de tokens lematizados. La Etapa 2 **no reimplementa** nada de la Etapa 1: consume su salida.
+La frontera entre etapas es la lista de tokens lematizados. Las Etapas 2 y 3 **no reimplementan** nada de la Etapa 1: consumen su salida. La Etapa 3 introduce una sola diferencia deliberada, que es conservar las stop words.
 
 ---
 
@@ -167,7 +170,7 @@ Peso TF-IDF medio por corpus. Es la lectura **interpretable** del modelo: se pue
 
 ### Proyección del espacio vectorial
 
-![Proyección LSA del espacio TF-IDF](docs/proyeccion_lsa.png)
+![Proyección LSA del espacio TF-IDF](docs/proyeccion_lsa_parrafo.png)
 
 La reducción usa **`TruncatedSVD`**, no `PCA`, por tres razones acumulativas:
 
@@ -176,6 +179,59 @@ La reducción usa **`TruncatedSVD`**, no `PCA`, por tres razones acumulativas:
 3. `TruncatedSVD` aplicado a una matriz TF-IDF **es** *Latent Semantic Analysis* (Deerwester et al., 1990). Las componentes latentes agrupan términos co-ocurrentes, con lo que dos sinónimos dejan de ser ortogonales. Es el único punto del pipeline que merece el adjetivo *semántico*.
 
 La varianza explicada se imprime en el título del gráfico y no como nota al pie. Un scatter de dos componentes sobre un espacio de cientos de dimensiones puede representar una fracción pequeña de la información, y cualquier agrupamiento aparente puede ser artefacto de proyección. Sin ese número, la figura no es evidencia.
+
+> **Nota (módulo 5).** Las cifras de esta sección se generaron con los dos corpus originales. Desde que *Marianela* está en `data/raw/`, `--vectorizar` sin `--corpus` la incluye: sus ~1 270 párrafos dominan la matriz frente a las decenas de los otros dos textos, y los resultados cambian. Las figuras y tablas del módulo 4 no se regeneraron.
+
+---
+
+## Resultados — Etapa 3: embeddings Word2Vec
+
+### Diseño
+
+Word2Vec aprende un vector denso por **palabra** a partir de los contextos en los que aparece (hipótesis distribucional). A diferencia de TF-IDF, dos palabras que nunca coinciden pero comparten contextos quedan cerca.
+
+| Decisión | Valor | Razón |
+|---|---|---|
+| Corpus | los tres de `data/raw/` | *Marianela* aporta el 97 % de los tokens (50 759 de 52 258) |
+| Unidad | lema, en minúsculas | con ~52 k tokens, la flexión del español repartiría las cuentas de cada palabra por debajo de `min_count` |
+| Stop words | **no se filtran** al entrenar | la ventana de contexto necesita el texto íntegro; el submuestreo (`sample=1e-3`) degrada las palabras frecuentes sin borrarlas |
+| Stop words | **sí se excluyen** al graficar | las palabras más frecuentes de una novela son palabras función (`el`: 3 992, `de`: 2 542, `que`: 1 847) y taparían el contenido |
+| Troceo | por párrafo, con `nlp.pipe()` | los cortes caen en líneas en blanco, nunca a mitad de oración; un corte arbitrario inventaría un final de oración y el parser construiría un árbol falso |
+| Algoritmo | skip-gram, 100 dim, ventana 5, `min_count=5`, 30 épocas | skip-gram aprende mejor las palabras poco frecuentes; un corpus chico necesita más épocas que el default de 5 |
+| Reproducibilidad | `workers=1`, `seed=42`, `PYTHONHASHSEED=0` | ver abajo |
+
+El libro tiene 293 991 caracteres, **por debajo** de `nlp.max_length` (1 000 000). Se trocea de todos modos: un `Doc` por párrafo acota el pico de memoria del parser, procesar en lote es más rápido y el código no cambia si mañana el corpus es diez veces más grande.
+
+**Reproducibilidad.** gensim inicializa cada vector con `hash(palabra + semilla)`, y Python aleatoriza el hash de `str` en cada proceso. Fijar `seed` sin fijar `PYTHONHASHSEED` produce vectores distintos en cada corrida. Además, con varios hilos el orden de las actualizaciones depende del planificador del sistema operativo, así que la semilla no basta (documentación de gensim). `PYTHONHASHSEED` se lee al arrancar el intérprete y no puede fijarse desde el código; si falta, el pipeline lo advierte. Verificado: dos corridas con `PYTHONHASHSEED=0` producen vectores y texto procesado con SHA-256 idénticos.
+
+### Diagnóstico de suficiencia
+
+| Métrica | Valor |
+|---|---|
+| Tokens (con stop words) | 52 258 |
+| Oraciones | 3 498 |
+| Vocabulario (`min_count=5`) | 1 056 lemas |
+| Cobertura (tokens dentro del vocabulario) | 85.9 % |
+| Estabilidad de vecinos (Jaccard medio del top 10, semillas 42 vs. 43) | **0.445** |
+
+**El corpus es insuficiente y el pipeline lo dice.** `most_similar` siempre devuelve diez vecinos con cuatro decimales, aunque sean ruido de la inicialización aleatoria; nada en su salida distingue señal de ruido. Por eso el diagnóstico reentrena con otra semilla y mide cuántos vecinos sobreviven: lo que pertenece al corpus sobrevive al cambio de semilla, y lo que pertenece a la inicialización no. Con un Jaccard medio de 0.445 (0.25 para `nela` y `parecer`, 0.67 para `ojo`), más de la mitad del top 10 cambia con la semilla. Las dos condiciones de aviso se cumplen:
+
+```
+[aviso] Corpus insuficiente: 52,258 tokens (umbral 100,000).
+[aviso] Vecinos inestables: Jaccard medio 0.45 entre semillas 42 y 43 (umbral 0.5).
+```
+
+El umbral de 100 000 tokens es una heurística de este proyecto, no un estándar: el modelo original se entrenó con miles de millones.
+
+### Proyección del espacio de embeddings
+
+![Palabras de contenido más frecuentes](docs/embeddings_frecuentes.png)
+
+![Vecindarios de las palabras sonda](docs/embeddings_vecindarios.png)
+
+La reducción usa **`PCA`**, no `TruncatedSVD`, por la razón inversa a la de la Etapa 2. Allá la matriz es dispersa y centrarla la densificaría. Aquí ya es densa, y centrarla es **necesario**: los embeddings comparten un vector medio no nulo, y sin restarlo la primera componente apunta hacia esa media, que es común a todo el vocabulario y no distingue ninguna palabra de otra.
+
+La varianza explicada va en el título y es relativa a las palabras graficadas, no al vocabulario completo: **15.8 %** para las 60 palabras más frecuentes y **31.3 %** para los vecindarios. La primera figura conserva menos de la sexta parte de la variación de esas 60 palabras, así que cualquier agrupamiento que muestre puede ser artefacto de la proyección. Lo más visible es una oposición sobre la componente 1: a la derecha, casi todos los personajes (`nela`, `pablo`, `florentina`, `sofía`, `teodoro`, `golfín`, `maría`) junto con vocabulario de diálogo y de cuerpo (`exclamar`, `voz`, `mano`, `ciego`); a la izquierda, desplazamiento y lugar (`llegar`, `entrar`, `salir`, `casa`, `tierra`, `mina`). `carlos` es la excepción y cae a la izquierda. Con 8.4 % de varianza en esa componente y la inestabilidad medida arriba, esto es una hipótesis que hay que comprobar sobre un corpus mayor, no un hallazgo.
 
 ---
 
@@ -206,6 +262,12 @@ Impacto sobre la Etapa 2: cada lema espurio es **un eje adicional** en el espaci
 
 Ninguna de las dos técnicas es *ground truth* por sí sola. Distinguir el origen de cada divergencia exige inspección manual.
 
+### Embeddings
+
+**Los errores del lematizador entran al vocabulario de Word2Vec.** `piens`, `señoritar` y `quier` aparecen entre los vecinos: son lemas inexistentes, el mismo fenómeno de la tabla anterior. Con lemas, cada error fragmenta los contextos de una palabra real en dos entradas.
+
+**El doble guion ASCII fragmentaba el vocabulario.** *Marianela* transcribe la raya de diálogo como `--`, pegada a la palabra (`--¿Y tú?--dijo`). spaCy no lo separa, así que `nela--`, `--nela` y `nela` entraban como tres palabras distintas; el primer entrenamiento mostraba `nela-- (0.6062)` como vecino más cercano de `nela`. `carga.py` normaliza `--` a ` — ` con espacios, porque spaCy tampoco separa una raya pegada por ambos lados.
+
 ### Vectorización
 
 **El IDF de scikit-learn no anula los términos ubicuos.** Con `smooth_idf=True` (el valor por defecto) la fórmula implementada es
@@ -222,7 +284,7 @@ y no la formulación clásica `log(N / df)`. El `+1` fuera del logaritmo implica
 
 **Los corpus son demasiado pequeños para el régimen donde TF-IDF brilla.** Dos textos de 2.4 KB y 6.1 KB producen un puñado de párrafos. Los resultados sirven para demostrar el mecanismo y validar la implementación con tests; no para sostener afirmaciones sobre el desempeño de la técnica. Un corpus adecuado tendría cientos de documentos.
 
-**El espacio es léxico, no semántico.** BoW y TF-IDF asignan a cada término un eje ortogonal, así que dos sinónimos perfectos son tan distintos entre sí como dos palabras sin relación. La proyección con `TruncatedSVD` mitiga esto parcialmente, y solo en la medida en que el corpus contenga suficiente co-ocurrencia. El nombre habitual de estas representaciones —*modelos semánticos*— describe la aspiración, no el mecanismo.
+**El espacio es léxico, no semántico** (en las Etapas 1 y 2). BoW y TF-IDF asignan a cada término un eje ortogonal, así que dos sinónimos perfectos son tan distintos entre sí como dos palabras sin relación. La proyección con `TruncatedSVD` mitiga esto parcialmente, y solo en la medida en que el corpus contenga suficiente co-ocurrencia. El nombre habitual de estas representaciones —*modelos semánticos*— describe la aspiración, no el mecanismo.
 
 ---
 
@@ -241,13 +303,19 @@ y no la formulación clásica `log(N / df)`. El `+1` fuera del logaritmo implica
 │   ├── segmentacion.py            # texto → documentos (párrafos, con fallback)
 │   ├── metricas.py                # compresión, TTR, divergencia stem/lema
 │   ├── vectorizacion.py           # BoW, TF-IDF, similitud coseno, términos top
-│   └── visualizacion.py           # TruncatedSVD (LSA) + figura
+│   ├── embeddings.py              # Word2Vec, diagnóstico de suficiencia
+│   └── visualizacion.py           # TruncatedSVD (LSA) / PCA + figura
 ├── tests/
-│   ├── test_normalizacion.py      # 6 tests
-│   └── test_vectorizacion.py      # 6 tests
-├── docs/
-│   └── proyeccion_lsa.png         # figura referenciada por este README (versionada)
-├── outputs/                       # tablas CSV (no versionadas)
+│   ├── test_cli.py                # humo: CLI, imports, entorno
+│   ├── test_normalizacion.py
+│   ├── test_vectorizacion.py
+│   └── test_embeddings.py
+├── data/processed/
+│   └── corpus_embeddings.txt      # entrada exacta de Word2Vec (versionada)
+├── docs/                          # figuras referenciadas por este README (versionadas)
+│   ├── proyeccion_lsa_{oracion,parrafo}.png
+│   └── embeddings_{frecuentes,vecindarios}.png
+├── outputs/                       # tablas CSV y modelo Word2Vec (no versionados)
 ├── requirements.txt               # dependencias directas (intención)
 ├── requirements.lock.txt          # árbol completo resuelto (estado)
 └── .python-version                # intérprete fijado vía pyenv
@@ -264,7 +332,7 @@ y no la formulación clásica `log(N / df)`. El `+1` fuera del logaritmo implica
 ## Requisitos
 
 - Python 3.12.12 (fijado en `.python-version`, gestionado con [pyenv](https://github.com/pyenv/pyenv))
-- spaCy 3.8.16 · es_core_news_sm 3.8.0 · NLTK 3.9.1 · scikit-learn 1.5.2 · pandas 2.2.3 · matplotlib · pytest 8.3.3
+- spaCy 3.8.16 · es_core_news_sm 3.8.0 · NLTK 3.9.1 · scikit-learn 1.5.2 · pandas 2.2.3 · matplotlib · gensim 4.4.0 · pytest 8.3.3
 
 ### Instalación
 
@@ -277,7 +345,7 @@ source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
 python -m spacy validate           # verifica compatibilidad modelo ↔ librería
-pytest                             # esperado: 12 passed
+pytest                             # esperado: 35 passed
 ```
 
 El modelo se instala **fijado por URL del release**, no con `spacy download` en tiempo de ejecución. Descargar en runtime rompe cualquier build sin salida a internet (contenedor, CI) e instala una versión no fijada.
@@ -314,6 +382,17 @@ python main.py --vectorizar --guardar                 # exporta CSV + figura
 | `--sin-negadores` | Desactiva la preservación de negadores |
 | `--sin-filtro` | Desactiva por completo el filtrado de stop words |
 | `--vectorizar` | Ejecuta la Etapa 2 sobre todos los corpus indicados |
+
+### Etapa 3 — embeddings
+
+```bash
+PYTHONHASHSEED=0 python main.py --embeddings            # los corpus de data/raw/
+PYTHONHASHSEED=0 python main.py --embeddings --guardar  # modelo, texto procesado y figuras
+```
+
+Con `--guardar` escribe el modelo en `outputs/embeddings/word2vec.model`, el texto procesado en `data/processed/corpus_embeddings.txt` (una oración por línea, lemas separados por espacio: formato `LineSentence` de gensim) y las dos figuras en `docs/`. `--embeddings` y `--vectorizar` son excluyentes: cada etapa se invoca en su propia corrida.
+
+Con `--granularidad bloque`, los archivos de la Etapa 2 llevan N en el nombre (`proyeccion_lsa_bloque4.png`): corridas con distinto `--oraciones-por-bloque` ya no se sobrescriben.
 
 La Etapa 2 requiere **al menos dos corpus** o un corpus con suficientes párrafos. Con un solo documento el IDF es indefinido y el pipeline aborta con un mensaje explícito en lugar de producir una matriz sin significado.
 
@@ -372,6 +451,7 @@ Documentar el origen de cada dato es parte del trabajo. Dos textos visualmente i
 | Archivo | Obra | Nota |
 |---|---|---|
 | `cap1_principito.txt` | *El Principito*, cap. 1 — Antoine de Saint-Exupéry, traducción de Bonifacio del Carril | Incluido en el repositorio por requisito de la actividad evaluada. **No es de dominio público en México**: la ley federal establece vida del autor más 100 años, y Saint-Exupéry falleció en 1944. Se incluye un solo capítulo, con fines exclusivamente académicos y sin ánimo de lucro. |
+| `marianela.txt` | *Marianela* — Benito Pérez Galdós (Imprenta y Litografía de La Guirnalda, Madrid, 1878) | **Dominio público**: Galdós falleció en 1920, y la ley mexicana (vida del autor más 100 años) lo libera desde 2021. Novela completa (293 991 caracteres, 22 capítulos), sin encabezado ni pie de licencia. Transcribe la raya de diálogo como `--` ASCII, normalizado en `carga.py`. |
 | `caperucita_roja.txt` | *Caperucita Roja* — relato folclórico | El relato carece de autor con derechos vigentes, pero la traducción o adaptación concreta puede tener derechos propios. *Completar con la fuente exacta utilizada.* |
 
 Durante el desarrollo, una versión previa del corpus resultó ser una **adaptación pedagógica para estudiantes de español como segunda lengua**, no la traducción canónica. Su densidad anómala de pronombres explícitos y muletillas habría distorsionado todas las métricas. Pasó todas las verificaciones técnicas —UTF-8 válido, sin mojibake, tamaño suficiente— y solo la inspección del contenido lo detectó.
@@ -408,6 +488,20 @@ pytest -v
 | `test_similitud_diagonal_unitaria` | La matriz de similitud coseno tiene diagonal 1.0 |
 | `test_segmentacion_descarta_fragmentos_cortos` | Títulos y líneas sueltas no entran como documentos |
 
+### Etapa 3 — `tests/test_embeddings.py`
+
+| Test | Qué verifica |
+|---|---|
+| `test_entrenamiento_conserva_stop_words` | El corpus de Word2Vec conserva `el`, `de` y `no`; la puntuación sí se descarta |
+| `test_construir_corpus_sin_argumento_conserva_comportamiento_previo` | Las Etapas 1 y 2 siguen filtrando stop words |
+| `test_troceo_por_parrafo_no_parte_oraciones` | Cada parte termina en un final de oración real; un salto de línea simple no corta |
+| `test_raya_ascii_se_separa_de_la_palabra` | `--Nela--` produce el lema `nela`, sin guiones pegados |
+| `test_misma_semilla_da_vectores_identicos` | Con `workers=1`, la misma semilla da vectores idénticos, y otra semilla no |
+| `test_corpus_minimo_dispara_aviso` | Un corpus diminuto produce el aviso de insuficiencia |
+| `test_pca_centra_la_matriz` | La proyección tiene media cero aunque los vectores compartan un offset |
+
+`tests/test_cli.py` cubre además que el CLI arranque, que cada módulo de `src/` importe (se descubren solos), que `requirements.txt` coincida con el entorno y que `--granularidad bloque` produzca nombres de archivo distintos para cada N.
+
 `test_reproduce_el_fallo_del_curso` **codifica el defecto como comportamiento esperado** bajo una configuración explícita. Si algún día empieza a fallar, significa que la lista de stop words de spaCy cambió — y el aviso llega por el test, no por resultados anómalos varios módulos después.
 
 `test_idf_de_termino_ubicuo_es_uno_no_cero` cumple la misma función frente a scikit-learn: convierte una nota al pie de la documentación en una aserción ejecutable. Si una versión futura cambiara la fórmula por defecto, el test avisa antes de que las métricas se muevan sin explicación.
@@ -431,7 +525,11 @@ pytest -v
 | Documento = párrafo, no oración | Con oraciones, `df ≈ 1` en casi todo el vocabulario y el IDF pierde varianza. La granularidad es un parámetro del experimento, no un detalle de implementación. |
 | `analyzer` de identidad en los vectorizadores | Los defaults de scikit-learn re-tokenizan con `\b\w\w+\b` y anulan el criterio lingüístico de la Etapa 1 sin lanzar ninguna excepción. |
 | Función nombrada a nivel de módulo en lugar de `lambda` | Un vectorizador con `lambda` no es serializable con `pickle`. Persistirlo para inferencia es un requisito frecuente y el costo de preverlo hoy es cero. |
-| `TruncatedSVD` en lugar de `PCA` | `PCA` centra los datos, densifica la matriz dispersa y produce una primera componente dominada por la longitud del documento. |
+| `TruncatedSVD` en lugar de `PCA` (Etapa 2) | `PCA` centra los datos, densifica la matriz dispersa y produce una primera componente dominada por la longitud del documento. |
+| `PCA` en lugar de `TruncatedSVD` (Etapa 3) | La matriz de embeddings ya es densa, y sin centrar la primera componente captura el vector medio del vocabulario. |
+| Word2Vec sin filtrar stop words | La ventana de contexto necesita el texto íntegro; el submuestreo (`sample`) hace el trabajo del filtro sin romper la ventana. |
+| `workers=1` + `PYTHONHASHSEED` | Con varios hilos la semilla no garantiza reproducibilidad; sin `PYTHONHASHSEED`, la inicialización cambia en cada proceso. |
+| Estabilidad entre semillas como diagnóstico | `most_similar` siempre devuelve vecinos con cuatro decimales; solo comparando dos semillas se distingue señal de ruido. |
 | Varianza explicada en el título del gráfico | Una proyección sin ese número no es evidencia: cualquier agrupamiento puede ser artefacto. |
 | Backend `Agg` de matplotlib | El pipeline escribe archivos, no abre ventanas: funciona igual en WSL sin X, en contenedor y en CI. |
 | `plt.close(fig)` tras guardar | Figuras abiertas acumuladas son una fuga de memoria en cualquier ejecución por lotes. |
