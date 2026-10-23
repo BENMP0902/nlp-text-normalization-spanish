@@ -1,6 +1,6 @@
 # nlp-text-normalization-spanish
 
-Pipeline reproducible de **normalización, lematización, vectorización y embeddings de texto en español** con spaCy, scikit-learn y gensim, construido para evaluar empíricamente el efecto de cada etapa del preprocesamiento sobre el vocabulario resultante y sobre el espacio vectorial que se construye a partir de él. Incluye además un notebook de modelos de lenguaje con n-gramas.
+Pipeline reproducible de **normalización, lematización, vectorización y embeddings de texto en español** con spaCy, scikit-learn y gensim, construido para evaluar empíricamente el efecto de cada etapa del preprocesamiento sobre el vocabulario resultante y sobre el espacio vectorial que se construye a partir de él. Incluye además un notebook de modelos de lenguaje con n-gramas y perplejidad.
 
 El proyecto no se limita a ejecutar el pipeline: **mide** su efecto, **documenta** sus fallos y **verifica** con tests que las decisiones de diseño se cumplen.
 
@@ -272,17 +272,24 @@ La varianza explicada va en el título y es relativa a las palabras graficadas, 
 | Aspecto | Implementación |
 |---|---|
 | Preprocesamiento | minúsculas y eliminación de puntuación. **Sin** lematizar y **sin** quitar stop words, por la misma razón que en la Etapa 3: el contexto secuencial importa |
-| N-gramas | `nltk.ngrams` con relleno `<s>` a la izquierda y `</s>` a la derecha |
-| Suavizado | Laplace (add-one), aplicado al calcular las probabilidades |
-| Salida | las seis continuaciones más probables para `N=2` (contexto `el`) y `N=3` (contexto `el gato`) |
+| Relleno | `n-1` marcas `<s>` a la izquierda y **una** `</s>` a la derecha. `nltk.ngrams(pad_right=True)` agrega `n-1` marcas de fin, y con `N=3` inventa el evento `('tejado', '</s>') → '</s>'`, que no ocurre en el texto |
+| Vocabulario | las palabras con frecuencia ≥ `frecuencia_minima`, más `</s>` y `<unk>`. `<s>` no entra: solo aparece como contexto, nunca se predice |
+| Palabras nuevas | toda palabra fuera del vocabulario se trata como `<unk>`, tanto al predecir como en el contexto |
+| Suavizado | Laplace (add-one). Un contexto nunca visto recibe la distribución uniforme `1/\|V\|`, que es la misma fórmula con conteos en cero |
+| Perplejidad | `PP = exp(-(1/N) · Σ log P(wᵢ \| contexto))`, acumulada en logaritmos; `N` cuenta cada token predicho, incluido `</s>` |
 
-Resultado con `N=2`: `P(gato | el) = P(perro | el) = P(tejado | el) = P(jardín | el) = 0.188`. Con `N=3`: `P(come | el gato) = P(está | el gato) = 0.200`.
+**Verificaciones dentro del notebook.** Un `assert` comprueba que cada distribución `P(· | contexto)` sume 1; antes de incluir `</s>` en el vocabulario, los contextos que preceden al fin de frase sumaban 0.8. Otro comprueba que, sin ningún contexto aprendido, la perplejidad sea exactamente `|V|`. Ambas fallan la ejecución si no se cumplen.
 
-**Estado actual, documentado como pendiente y no como resuelto:**
+**Resultados** (corpus de juguete, `|V| = 10`; un modelo uniforme tiene `PP = 10`):
 
-- **`</s>` no está en el vocabulario.** Se cuenta en el denominador del suavizado pero nunca recibe probabilidad, así que la distribución de los contextos que preceden al fin de oración no suma 1. Verificado: para `tejado` y `jardín` suma **0.8**.
-- **No hay token `<unk>`.** Una palabra fuera del vocabulario no tiene probabilidad definida.
-- **La perplejidad no está implementada todavía.** Con los dos puntos anteriores sin resolver, cualquier perplejidad calculada sobre este modelo saldría sesgada.
+| Frase de prueba | PP, N=2 | PP, N=3 |
+|---|---|---|
+| Las cuatro de entrenamiento | 4.30 | 4.41 |
+| `el gato está en el jardín` (combinación nueva de n-gramas vistos) | 4.30 | 4.41 |
+| `el ratón come en el tejado` (`ratón` → `<unk>`) | 5.41 | 6.04 |
+| `tejado el en está gato el` (orden roto) | **14.08** | **10.49** |
+
+El modelo distingue el orden: la frase desordenada queda por encima del modelo uniforme, porque cada transición que asigna es improbable. Con este corpus, **N=3 no mejora a N=2** ni siquiera sobre el texto de entrenamiento (4.41 frente a 4.30). Con cuatro frases, cada contexto de dos palabras se ve una o dos veces, y Laplace reparte la misma unidad de masa entre las 10 palabras del vocabulario. Pesa más cuanto menos datos tiene el contexto. Es el problema de dispersión que motiva métodos como *backoff* o Kneser-Ney.
 
 El entorno del notebook se instala aparte, con `pip install -r requirements-dev.txt` (`ipykernel`, `jupyterlab`). El kernel debe apuntar al `.venv` del proyecto; la primera celda lo verifica imprimiendo `sys.executable`.
 
@@ -533,7 +540,7 @@ Durante el desarrollo, una versión previa del corpus resultó ser una **adaptac
 ## Tests
 
 ```bash
-pytest -v                          # 35 tests; el notebook del módulo 6 no tiene tests
+pytest -v                          # 35 tests; el notebook del módulo 6 se verifica con sus propios assert
 ```
 
 ### Etapa 1 — `tests/test_normalizacion.py`
@@ -623,7 +630,7 @@ pytest -v                          # 35 tests; el notebook del módulo 6 no tien
 
 Documentado como pendiente y no como resuelto:
 
-- **Módulo 6:** incluir `</s>` en el vocabulario, agregar `<unk>`, implementar la perplejidad y cubrir con un test que cada distribución sume 1.
+- **Módulo 6:** evaluar sobre un corpus real (por ejemplo *Marianela*, con partición train / test) y comparar Laplace con *backoff* o Kneser-Ney. Las verificaciones del notebook son `assert` internos; no hay un test de pytest que ejecute el notebook.
 - **Bigramas** (`ngram_range=(1, 2)`) para representar el alcance de la negación en la Etapa 2, cerrando el hilo abierto por la Etapa 1. El notebook del módulo 6 ya construye los n-gramas.
 - **`--corpus` repetible** (`action="append"`) para reproducir el módulo 4 desde la CLI con un subconjunto de `data/raw/`, en lugar del `python -c` de la Etapa 2.
 - **Etapa 2 con *Marianela*:** decidir si se regeneran las figuras con los tres corpus o si el módulo 4 queda fijado en los dos originales.
