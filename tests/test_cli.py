@@ -156,3 +156,51 @@ def test_no_hay_dependencias_rotas():
     r = subprocess.run([sys.executable, "-m", "pip", "check"],
                        capture_output=True, text=True)
     assert r.returncode == 0, f"Entorno inconsistente:\n{r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# ¿La CLI y el código hablan del mismo conjunto de valores?
+# ---------------------------------------------------------------------------
+
+def _accion(parser, destino: str):
+    """Busca el argumento de argparse por su `dest`.
+
+    parser._actions es atributo privado, pero argparse no expone otra forma
+    de leer los choices declarados. Si una versión futura lo cambiara, este
+    helper falla con AttributeError y no con un falso verde.
+    """
+    return next(a for a in parser._actions if a.dest == destino)
+
+
+def test_choices_de_granularidad_coinciden_con_estrategias():
+    """Los choices de --granularidad son exactamente las claves de ESTRATEGIAS.
+
+    Hoy choices se construye desde el diccionario, así que el test pasa por
+    construcción. Existe para que siga siendo así: si alguien vuelve a
+    escribir los choices a mano, o agrega una estrategia sin exponerla, la
+    divergencia que originó este test ("bloque" en la CLI, "parrafo" en el
+    código) se detecta aquí y no en un resultado silenciosamente equivocado.
+    """
+    import main
+    choices = _accion(main.construir_parser(), "granularidad").choices
+    assert set(choices) == set(main.ESTRATEGIAS)
+
+
+def test_default_de_granularidad_es_una_estrategia():
+    """El default no pasa por la validación de choices de argparse."""
+    import main
+    default = _accion(main.construir_parser(), "granularidad").default
+    assert default in main.ESTRATEGIAS
+
+
+def test_granularidad_desconocida_lanza_valueerror():
+    """Un valor fuera del diccionario falla con un mensaje que lista los válidos.
+
+    La validación ocurre antes de invocar spaCy, así que el test no procesa
+    texto.
+    """
+    import main
+    with pytest.raises(ValueError, match="Valores válidos") as excinfo:
+        main.documentos_lematizados("texto", "capitulo")
+    for clave in main.ESTRATEGIAS:
+        assert clave in str(excinfo.value)

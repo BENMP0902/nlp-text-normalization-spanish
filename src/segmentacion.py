@@ -52,7 +52,8 @@ def segmentar_en_bloques(doc, oraciones_por_bloque: int = 4) -> List[str]:
     ]
 
 
-def construir_documentos(texto: str, nlp, min_documentos: int = 6) -> List[str]:
+def construir_documentos(texto: str, nlp, min_documentos: int = 6,
+                         oraciones_por_bloque: int = 4) -> List[str]:
     """
     Estrategia con degradación controlada (graceful degradation):
       1) intenta párrafos;
@@ -70,6 +71,6 @@ def construir_documentos(texto: str, nlp, min_documentos: int = 6) -> List[str]:
         f"[segmentacion] Solo {len(documentos)} párrafos "
         f"(mínimo {min_documentos}); uso bloques de oraciones."
     )
-    documentos = segmentar_en_bloques(nlp(texto))
+    documentos = segmentar_en_bloques(nlp(texto), oraciones_por_bloque)
     print(f"[segmentacion] {len(documentos)} documentos por bloque de oraciones.")
     return documentos

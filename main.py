@@ -29,7 +29,7 @@ from src.metricas import (
     type_token_ratio,
     sobre_stemming,
 )
-from src.segmentacion import construir_documentos
+from src.segmentacion import construir_documentos, segmentar_en_bloques
 from src.vectorizacion import (
     construir_bow,
     construir_tfidf,
@@ -94,29 +94,8 @@ def palabras_muestra(tokens: list, n: int = 10) -> set[str]:
 # ETAPA 2 — Vectorización (módulo 4)
 # =====================================================================
 
-def documentos_lematizados(texto: str, granularidad: str) -> list[list[str]]:
-    """Aplica la etapa 1 sobre el texto y devuelve documentos como listas de lemas.
-
-    La granularidad es el PARÁMETRO DEL EXPERIMENTO, no un detalle interno:
-
-    - "oracion": reproduce el material de referencia. construir_corpus() ya lo
-      implementa desde el módulo 3. Con documentos tan cortos, df≈1 para casi
-      todo el vocabulario, el IDF pierde varianza y TF-IDF degenera en BoW
-      binario L2-normalizado.
-    - "parrafo": documentos con masa suficiente para que el IDF discrimine.
-
-    Exponer ambas rutas convierte una afirmación del README en una medición.
-    Es el mismo patrón de --sin-negadores: reproducir el comportamiento del
-    material y cuantificar la diferencia.
-    """
-    if granularidad == "oracion":
-        return construir_corpus(procesar(texto))
-
-    # `procesar` se pasa como el callable nlp. construir_documentos solo lo usa
-    # en la ruta de fallback, cuando el .txt no trae párrafos separados por
-    # línea en blanco y hay que segmentar en bloques de oraciones.
-    documentos = construir_documentos(texto, procesar)
-
+def _lematizar_cada(documentos: list[str]) -> list[list[str]]:
+    """Lematiza cada documento de texto por separado."""
     # Una llamada a spaCy por documento. Aceptable con estos corpus; para
     # volumen real, nlp.pipe(textos, batch_size=...) procesa en lote y evita
     # el overhead de reconstruir el pipeline en cada invocación.
@@ -124,9 +103,78 @@ def documentos_lematizados(texto: str, granularidad: str) -> list[list[str]]:
     return [lematizar(procesar(d))[0] for d in documentos]
 
 
+# Las tres estrategias comparten firma (texto, oraciones_por_bloque) para que
+# el diccionario de despacho pueda invocarlas sin distinguir casos. Las que no
+# usan oraciones_por_bloque lo reciben y lo ignoran.
+
+def _por_oracion(texto: str, oraciones_por_bloque: int) -> list[list[str]]:
+    """Una oración = un documento. Reproduce el material de referencia.
+
+    construir_corpus() ya lo implementa desde el módulo 3 y lematiza cada
+    oración dentro del contexto del texto completo. Con documentos tan cortos,
+    df≈1 para casi todo el vocabulario, el IDF pierde varianza y TF-IDF
+    degenera en BoW binario L2-normalizado.
+    """
+    return construir_corpus(procesar(texto))
+
+
+def _por_parrafo(texto: str, oraciones_por_bloque: int) -> list[list[str]]:
+    """Un párrafo = un documento: masa suficiente para que el IDF discrimine.
+
+    `procesar` se pasa como el callable nlp. construir_documentos solo lo usa
+    en la ruta de respaldo, cuando el .txt no trae párrafos separados por
+    línea en blanco; oraciones_por_bloque aplica también solo ahí.
+    """
+    return _lematizar_cada(
+        construir_documentos(texto, procesar, oraciones_por_bloque=oraciones_por_bloque)
+    )
+
+
+def _por_bloque(texto: str, oraciones_por_bloque: int) -> list[list[str]]:
+    """N oraciones consecutivas = un documento.
+
+    Es la estrategia de respaldo de _por_parrafo expuesta directamente, para
+    textos sin párrafos (líneas duras cada 80 columnas). No es una unidad
+    lingüística: el tamaño del bloque es arbitrario.
+    """
+    return _lematizar_cada(segmentar_en_bloques(procesar(texto), oraciones_por_bloque))
+
+
+# Diccionario de despacho: ÚNICA fuente de verdad de las granularidades.
+# Los choices de --granularidad se construyen desde sus claves. Antes eran dos
+# listas escritas a mano en sitios distintos y divergieron ("bloque" en la CLI,
+# "parrafo" en el código) sin que nada fallara.
+ESTRATEGIAS = {
+    "oracion": _por_oracion,
+    "parrafo": _por_parrafo,
+    "bloque": _por_bloque,
+}
+
+
+def documentos_lematizados(texto: str, granularidad: str,
+                           oraciones_por_bloque: int = 4) -> list[list[str]]:
+    """Aplica la etapa 1 sobre el texto y devuelve documentos como listas de lemas.
+
+    La granularidad es el PARÁMETRO DEL EXPERIMENTO, no un detalle interno.
+    Exponer las rutas convierte una afirmación del README en una medición. Es
+    el mismo patrón de --sin-negadores: reproducir el comportamiento del
+    material y cuantificar la diferencia.
+    """
+    # Validación explícita: argparse ya filtra la CLI, pero esta función
+    # también se invoca desde código y tests. Un valor desconocido no debe
+    # caer en silencio a ninguna estrategia.
+    if granularidad not in ESTRATEGIAS:
+        raise ValueError(
+            f"Granularidad desconocida: {granularidad!r}. "
+            f"Valores válidos: {sorted(ESTRATEGIAS)}"
+        )
+    return ESTRATEGIAS[granularidad](texto, oraciones_por_bloque)
+
+
 def ejecutar_vectorizacion(rutas_corpus: list[Path],
                            granularidad: str = "parrafo",
-                           guardar: bool = False) -> None:
+                           guardar: bool = False,
+                           oraciones_por_bloque: int = 4) -> None:
     """Construye el espacio vectorial sobre todos los corpus y lo diagnostica."""
     corpus_tokens: list[list[str]] = []
     etiquetas: list[str] = []
@@ -135,7 +183,7 @@ def ejecutar_vectorizacion(rutas_corpus: list[Path],
         # cargar_texto() y no read_text(): valida encoding y detecta mojibake.
         # La doble codificación es UTF-8 válido y no lanza ninguna excepción.
         texto = cargar_texto(ruta)
-        for tokens in documentos_lematizados(texto, granularidad):
+        for tokens in documentos_lematizados(texto, granularidad, oraciones_por_bloque):
             if tokens:                       # descarta documentos vacíos tras el filtrado
                 corpus_tokens.append(tokens)
                 etiquetas.append(ruta.stem)  # "cap1_principito" → etiqueta de origen
@@ -199,7 +247,8 @@ def ejecutar_vectorizacion(rutas_corpus: list[Path],
 # CLI
 # =====================================================================
 
-def main() -> None:
+def construir_parser() -> argparse.ArgumentParser:
+    """Define la CLI. Separada de main() para que los tests puedan inspeccionarla."""
     parser = argparse.ArgumentParser(
         description="Pipeline de normalización (etapa 1) y vectorización (etapa 2)"
     )
@@ -215,12 +264,23 @@ def main() -> None:
                         help="Desactiva por completo el filtrado de stop words")
     parser.add_argument("--vectorizar", action="store_true",
                         help="Ejecuta la etapa 2 (feature extraction) sobre data/raw/")
-    parser.add_argument("--granularidad", choices=["bloque", "oracion"], default="bloque",
-                    help="Unidad que constituye un documento. 'bloque' agrupa N oraciones; "
-                         "'oracion' reproduce el material de referencia.")
+    # choices sale de ESTRATEGIAS: la CLI no puede ofrecer un valor que el
+    # código no sepa despachar, ni al revés.
+    parser.add_argument("--granularidad", choices=list(ESTRATEGIAS), default="parrafo",
+                        help="Unidad que constituye un documento en la etapa 2. "
+                             "'parrafo' (default) delimita por líneas en blanco; "
+                             "'oracion' reproduce el material de referencia; "
+                             "'bloque' agrupa N oraciones consecutivas y es la "
+                             "estrategia de respaldo para textos sin párrafos, "
+                             "no una tercera unidad lingüística.")
     parser.add_argument("--oraciones-por-bloque", type=int, default=4,
-                    help="Tamaño del bloque cuando --granularidad=bloque")
-    args = parser.parse_args()
+                        help="Oraciones por documento con --granularidad=bloque "
+                             "(y en el respaldo automático de 'parrafo'). Default: 4")
+    return parser
+
+
+def main() -> None:
+    args = construir_parser().parse_args()
 
     # Sobrescribimos config desde la CLI: permite comparar variantes sin editar
     # código. argparse convierte --sin-negadores en args.sin_negadores (guion
@@ -247,7 +307,8 @@ def main() -> None:
 
         ejecutar_vectorizacion(rutas,
                                granularidad=args.granularidad,
-                               guardar=args.guardar)
+                               guardar=args.guardar,
+                               oraciones_por_bloque=args.oraciones_por_bloque)
         return   # la etapa 2 no encadena con la etapa 1
 
     # --- 1. Carga ---
