@@ -243,6 +243,18 @@ def ejecutar_vectorizacion(rutas_corpus: list[Path],
         print("\n(sin --guardar: no se escribieron figura ni CSV)")
 
 
+def rutas_de_etapa(corpus: Path | None, etapa: str) -> list[Path]:
+    """Corpus de las etapas multi-corpus: todos los de data/raw/ o solo --corpus."""
+    if corpus is not None:
+        print(f"[aviso] {etapa} con un solo corpus: hay menos texto sobre el cual "
+              "estimar. Omite --corpus para usar todos los de data/raw/.")
+        return [resolver_corpus(corpus)]
+    rutas = sorted(config.DIR_RAW.glob("*.txt"))
+    if not rutas:
+        raise FileNotFoundError(f"No hay archivos .txt en {config.DIR_RAW}")
+    return rutas
+
+
 # =====================================================================
 # CLI
 # =====================================================================
@@ -294,17 +306,9 @@ def main() -> None:
 
     # --- Etapa 2: ruta alterna con retorno temprano ---
     if args.vectorizar:
-        if args.corpus is not None:
-            # --corpus restringe la etapa 2 a un solo texto. Se permite, pero con
-            # un corpus el IDF tiene mucho menos sobre qué discriminar.
-            rutas = [resolver_corpus(args.corpus)]
-            print("[aviso] --vectorizar con un solo corpus: el IDF pierde poder "
-                  "discriminante. Omite --corpus para usar todos los de data/raw/.")
-        else:
-            rutas = sorted(config.DIR_RAW.glob("*.txt"))
-            if not rutas:
-                raise FileNotFoundError(f"No hay archivos .txt en {config.DIR_RAW}")
-
+        # --corpus restringe la etapa 2 a un solo texto. Se permite, pero con
+        # un corpus el IDF tiene mucho menos sobre qué discriminar.
+        rutas = rutas_de_etapa(args.corpus, "--vectorizar")
         ejecutar_vectorizacion(rutas,
                                granularidad=args.granularidad,
                                guardar=args.guardar,
